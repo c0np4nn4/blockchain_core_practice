@@ -1,0 +1,21 @@
+{
+  "name": "ch-1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node main.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.19.1",
+    "crypto-js": "^4.1.1",
+    "express": "^4.17.2",
+    "merkle": "^0.2.0",
+    "random": "^3.0.6",
+    "ws": "^8.4.0"
+  }
+}
