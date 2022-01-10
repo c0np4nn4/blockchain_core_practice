@@ -6,12 +6,14 @@ const fs = require("fs");
 
 /* class */
 class BlockHeader {
-    constructor(version, index, previousHash, timestamp, merkleRoot) {
+    constructor(version, index, previousHash, timestamp, merkleRoot, difficulty, nonce) {
         this.version = version;
         this.index = index;
         this.previousHash = previousHash;
         this.timestamp = timestamp;
         this.merkleRoot = merkleRoot;
+        this.difficulty = difficulty;
+        this.nonce = nonce;
     }
 }
 
@@ -30,8 +32,8 @@ var blockchain = [getGenesisBlock()];
 /* function */
 function getBlockchain() { return blockchain; }
 function getLatestBlock() { return blockchain[blockchain.length - 1]; }
-function calculateHash(version, index, previousHash, timestamp, merkleRoot) {
-    return CryptoJS.SHA256(version + index + previousHash + timestamp + merkleRoot).toString().toUpperCase();
+function calculateHash(version, index, previousHash, timestamp, merkleRoot, difficulty, nonce) {
+    return CryptoJS.SHA256(version + index + previousHash + timestamp + merkleRoot + difficulty + nonce).toString().toUpperCase();
 }
 
 function calculateHashForBlock(block) {
@@ -40,7 +42,9 @@ function calculateHashForBlock(block) {
         block.header.index,
         block.header.previousHash,
         block.header.timestamp,
-        block.header.merkleRoot
+        block.header.merkleRoot,
+        block.header.difficulty,
+        block.header.nonce
     );
 }
 
@@ -49,6 +53,8 @@ function getGenesisBlock() {
     const index = 0;
     const previousHash = '0'.repeat(64);
     const timestamp = 1231006505; // 01/03/2009 @ 6:15pm (UTC)
+    const difficulty = 0;
+    const nonce = 0;
     const data = ["The Times 03/Jan/2009 Chancellor on brink of second bailout for banks"];
 
     const merkleTree = merkle("sha256").sync(data);
@@ -64,11 +70,12 @@ function generateNextBlock(blockData) {
     const nextIndex = previousBlock.header.index + 1;
     const previousHash = calculateHashForBlock(previousBlock);
     const nextTimestamp = getCurrentTimestamp();
+    const difficulty = getDifficulty(getBlockchain());
 
     const merkleTree = merkle("sha256").sync(blockData);
     const merkleRoot = merkleTree.root() || '0'.repeat(64);
 
-    const newBlockHeader = new BlockHeader(currentVersion, nextIndex, previousHash, nextTimestamp, merkleRoot);
+    const newBlockHeader = new findBlock(currentVersion, nextIndex, previousHash, nextTimestamp, merkleRoot, difficulty);
     return new Block(newBlockHeader, blockData);
 }
 
@@ -114,6 +121,15 @@ function isValidNewBlock(newBlock, previousBlock) {
         return false;
     }
 
+    else if (!isValidTimestamp(newBlock, previousBlock)) {
+        console.log('invalid timestamp');
+        return false;
+    }
+
+    else if (!hashMatchesDifficulty(calculateHashForBlock(newBlock), newBlock.header.difficulty)) {
+        console.log("invalid hash: " + calculateHashForBlock(newBlock));
+        return false;
+    }
     return true;
 }
 
@@ -123,7 +139,9 @@ function isValidBlockStructure(block) {
     && typeof(block.header.previousBlock) === 'string'
     && typeof(block.header.timestamp) === 'number'
     && typeof(block.header.merkleRoot) === 'string'
-    && typeof(block.header.data) === 'object';
+    && typeof(block.header.difficulty) === 'number'
+    && typeof(block.header.nonce) === 'number'
+    && typeof(block.header.data) === 'object';   
 }
 
 // 블록체인 검증
@@ -215,6 +233,13 @@ function initHttpServer() {
         connectToPeers(peers);
         res.send();
     })
+
+    app.get("/address", function (req, res) {
+        const address = getPublicFromWallet().toString();
+        if (address != "") { res.send({ "address" : address }); }
+        else { res.send(); }
+    });
+    
     app.listen(http_port, function () { console.log("Listening http port on: " + http_port) });
 }
 
@@ -310,6 +335,8 @@ function responseLatestMsg() {
     });
 }
 
+
+
 function handleBlockchainResponse(message) {
     // message contains the blockchain from other node
     const receivedBlocks = JSON.parse(message.data);
@@ -388,3 +415,118 @@ function replaceChain(newBlocks) {
 
 initHttpServer();
 initP2PServer();
+
+// ch-3
+// POW
+
+function hashMatchesDifficulty(hash, difficulty) {
+    const hashBinary = hexToBinary(hash, toUpperCase());
+    const requiredPrefix = '0'.repeat(difficulty);
+    return hashBinary.startsWith(requiredPrefix);
+}
+
+function hexToBinary(s) {
+    const lookupTable = {
+        '0' : '0000', '1' : '0001', '2' : '0010', '3' : '0011',
+        '4' : '0100', '5' : '0101', '6' : '0110', '7' : '0111',
+        '8' : '1000', '9' : '1001', 'A' : '1010', 'B' : '1011',
+        'C' : '1100', 'D' : '1101', 'E' : '1110', 'F' : '1111'
+    };
+
+    var ret = "";
+    for (var i = 0; i < s.length; i++) {
+        if (lookupTable[s[i]]) { 
+            ret += lookupTable[s[i]];
+        }
+        else {
+            return null;
+        }
+    }
+
+    return ret;
+}
+
+function findBlock(currentVersion, nextIndex, previoushash, nextTimestamp, merkleRoot, difficulty) {
+    var nonce = 0;
+    while (true) {
+        var hash = calculateHash(currentVersion, nextIndex, previoushash, nextTimestamp, merkleRoot, difficulty, nonce);
+        if (hashMatchesDifficulty(hash, difficulty)) {
+            return new BlockHeader(currentVersion, nextIndex, previoushash, nextTimestamp, merkleRoot, difficulty, nonce);
+        }
+        nonce++;
+    }
+}
+
+const BLOCK_GENERATION_INTERVAL = 10;       // in seconds
+const DIFFICULTY_ADJUSTMENT_INTERVAL = 10;  // in blocks
+
+function getDifficulty(aBlockchain) {
+    const latestBlock = aBlockchain[aBlockchain.length - 1];
+    if (latestBlock.header.index % DIFFICULTY_ADJUSTMENT_INTERVAL === 0 && latestBlock.header.index !== 0) {
+        return getAdjustedDifficulty(latestBlock, aBlockchain);
+    }
+    return latestBlock.header.difficulty;
+}
+
+function getAdjustedDifficulty(latestBlock, aBlockchain) {
+    const prevAdjustmentBlock = aBlockchain[aBlockchain.length - DIFFICULTY_ADJUSTMENT_INTERVAL];
+    const timeTaken = latestBlock.header.timestamp - prevAdjustmentBlock.header.timestamp;
+    const timeExpected = BLOCK_GENERATION_INTERVAL * DIFFICULTY_ADJUSTMENT_INTERVAL;
+
+    if (timeTaken < timeExpected / 2) {
+        return prevAdjustmentBlock.header.difficulty + 1;
+    }
+    else if (timeTaken > timeExpected * 2) {
+        return prevAdjustmentBlock.header.difficulty - 1;
+    }
+    else {
+        return prevAdjustmentBlock.header.difficulty;
+    }
+}
+
+function isValidTimestamp(newBlock, previousBlock) {
+    return (previousBlock.header.timestamp - 60 < newBlock.header.timestamp)
+            && newBlock.header.timestamp - 60 < getCurrentTimestamp();
+}
+
+// ch - 4
+const ecdsa = require("elliptic");
+const { init } = require("express/lib/application");
+const ec = new ecdsa.ec("secp256k1");
+
+function generatePrivateKey() {
+    const keyPair = ec.genKeyPair();
+    const privateKey = keyPair.getPrivate();
+    return privateKey.toString(16);
+}
+
+const privateKeyLocation = "wallet/" + (process.env.PRIVATE_KEY || "default");
+const privateKeyFile = privateKeyLocation + "/private_key";
+
+// const fs = required("fs");  // Already imported
+function initWallet() {
+    if (fs.existsSync(privateKeyFile)) {
+        console.log("Load wallet with private key from: %s", privateKeyFile);
+        return ;
+    }
+
+    if (!fs.existsSync("wallet/")) { fs.mkdirSync("wallet/"); }
+    if (!fs.existsSync(privateKeyLocation)) { fs.mkdirSync(privateKeyLocation); }
+
+    const newPrivateKey = generatePrivateKey();
+    fs.writeFileSync(privateKeyFile, newPrivateKey);
+    console.log("Create new wallet with private key to: %s", privateKeyFile);
+}
+
+function getPrivateFromWallet() {
+    const buffer = fs.readFileSync(privateKeyFile, "utf8");
+    return buffer.toString();
+}
+
+function getPublicFromWallet() {
+    const privateKey = getPrivateFromWallet();
+    const key = ec.keyFromPrivate(privateKey, "hex");
+    return key.getPublic().encode("hex");
+}
+
+initWallet();
